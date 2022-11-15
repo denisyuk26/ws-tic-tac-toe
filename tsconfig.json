@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "module": "ESNext",
+    "module": "es2020",
     "esModuleInterop": true,
     "target": "es6",
     "noImplicitAny": true,
@@ -8,8 +8,10 @@
     "sourceMap": true,
     "outDir": "dist",
     "baseUrl": "./src",
+
     "paths": {
       "*": ["node_modules/*"]
     }
-  }
+  },
+  "include": ["src/**/*"]
 }
