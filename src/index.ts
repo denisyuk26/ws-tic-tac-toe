@@ -5,7 +5,7 @@ import { Server, Socket } from "socket.io";
 import { getUser, addUser, removeUser } from "./domain/users/user.ts";
 
 const app = express();
-const port = 3535;
+const port = process.env.PORT || 3535;
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
