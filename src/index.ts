@@ -15,7 +15,7 @@ const io = new Server(server, {
 });
 
 app.get("/", (req, res) => {
-  res.send("");
+  res.send("hello world");
 });
 
 io.on("connection", (socket: Socket) => {
