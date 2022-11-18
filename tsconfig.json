@@ -1,9 +1,9 @@
 {
   "compilerOptions": {
-    "module": "es2020",
     "esModuleInterop": true,
-    "target": "es6",
     "noImplicitAny": true,
+    "module": "CommonJS",
+    "target": "es2020",
     "moduleResolution": "node",
     "sourceMap": true,
     "outDir": "dist",
@@ -13,5 +13,8 @@
       "*": ["node_modules/*"]
     }
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  "ts-node": {
+    "esm": true // from the top of https://typestrong.org/ts-node/docs/imports/
+  }
 }

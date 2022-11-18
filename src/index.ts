@@ -1,25 +1,12 @@
 import express from "express";
 import http from "http";
+
 import { Server, Socket } from "socket.io";
-
-type User = {
-  id: string;
-  room: string;
-};
-
-export const userList = new Map<string, User>();
-
-export function getUser(id: string) {
-  return userList.get(id);
-}
-
-export function addUser(id: string, user: User) {
-  userList.set(id, user);
-}
-
-export function removeUser(id: string) {
-  userList.delete(id);
-}
+import { User } from "./users/user";
+import { GameStatus } from "./game/game-enums";
+import usersManager from "./users/users-manager";
+import roomStore from "./room/room-store";
+import { RoomManager } from "./room/room-manager";
 
 const app = express();
 const port = process.env.PORT || 3535;
@@ -36,40 +23,32 @@ app.get("/", (req, res) => {
 });
 
 io.on("connection", (socket: Socket) => {
+  const user = new User(socket.id, "main");
+  usersManager.addUser(user);
+
   socket.on("join_room", (roomId: string) => {
-    addUser(socket.id, { id: socket.id, room: roomId });
+    roomStore.createRoom(roomId);
+    const room = roomStore.getRoom(roomId);
+    const roomManager = new RoomManager(room);
+
     const connected = io.sockets.adapter.rooms.get(roomId);
     const socketRooms = Array.from(socket.rooms.values()).filter(
       (r) => r !== socket.id
     );
-
     if (socketRooms.length > 0 || (connected && connected.size === 2)) {
       socket.emit("join_error", "room is full");
-    } else {
-      socket.join(roomId);
+      return;
+    }
 
-      if (io.sockets.adapter.rooms.get(roomId).size === 2) {
-        socket.emit("room_joined", {
-          id: roomId,
-          status: "full",
-          player: "o",
-        });
-        socket.broadcast.to(roomId).emit("room_joined", {
-          id: roomId,
-          status: "full",
-          player: "x",
-        });
-        socket.emit("start_game", { status: "running", player: "o" });
-        socket
-          .to(roomId)
-          .emit("start_game", { status: "running", player: "x" });
-      } else {
-        socket.emit("room_joined", {
-          id: roomId,
-          status: "pending",
-          player: "x",
-        });
-      }
+    socket.join(roomId);
+
+    if (io.sockets.adapter.rooms.get(roomId)?.size === 2) {
+      usersManager.updateUserRoom(user.id, roomId);
+      roomManager.addSecondPlayerAndEmit(socket, user);
+      roomManager.startGameAndEmit(socket);
+    } else {
+      usersManager.updateUserRoom(user.id, roomId);
+      roomManager.addFirstPlayerAndEmit(socket, user);
     }
   });
 
@@ -77,30 +56,46 @@ io.on("connection", (socket: Socket) => {
     const socketRooms = Array.from(socket.rooms.values()).filter(
       (r) => r !== socket.id
     );
+
     const gameRoom = socketRooms && socketRooms[0];
-    socket.emit("restarted_game", { status: "running", player: "o" });
-    socket
-      .to(gameRoom)
-      .emit("restarted_game", { status: "running", player: "x" });
+    const room = roomStore.getRoom(gameRoom);
+    const roomManager = new RoomManager(room);
+    roomManager.restartGameAndEmit(socket);
   });
 
-  socket.on("make_move", (message) => {
+  socket.on("make_move", (message: { coordinate: number }) => {
     const socketRooms = Array.from(socket.rooms.values()).filter(
       (r) => r !== socket.id
     );
-    const gameRoom = socketRooms && socketRooms[0];
 
-    socket.to(gameRoom).emit("move_made", message);
+    const gameRoom = socketRooms && socketRooms[0];
+    const room = roomStore.getRoom(gameRoom);
+
+    const roomManager = new RoomManager(room);
+    roomManager.makeMoveAndEmit(socket, message.coordinate);
+
+    if (room.game.gameStatus === GameStatus.Win) {
+      roomManager.emitWinner(socket);
+    }
+
+    if (room.game.gameStatus === GameStatus.Draw) {
+      roomManager.emitDraw(socket);
+    }
   });
 
   socket.on("disconnect", () => {
-    const user = getUser(socket.id);
-    if (user && user.room) {
-      socket
-        .to(user.room)
-        .emit("room_left", { status: "pending", id: user.room });
-      removeUser(socket.id);
+    const user = usersManager.getUser(socket.id);
+    if (user.room === "main") {
+      return;
     }
+    roomStore.removeRoomIfEmpty(user.room);
+    const room = roomStore.getRoom(user.room);
+    const roomManager = new RoomManager(room);
+
+    if (user && user.room) {
+      roomManager.removeUserFromRoomAndEmit(socket, user);
+    }
+    usersManager.removeUser(socket.id);
   });
 });
 
