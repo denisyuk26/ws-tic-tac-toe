@@ -1,6 +1,6 @@
 import { User } from "../users/user";
 import { GameManager } from "../game/game-manager";
-import { UsersManager } from "../users/users-manager";
+import { BaseEntity } from "../domain/base-entity";
 
 export enum RoomStatus {
   Pending = "pending",
@@ -14,7 +14,7 @@ export enum PlayerSymbol {
 
 export type RoomPlayer = User & { symbol: PlayerSymbol };
 
-export class Room {
+export class Room extends BaseEntity {
   id: string;
   users: Map<string, RoomPlayer>;
   status: RoomStatus;
@@ -25,6 +25,7 @@ export class Room {
     users: Map<string, RoomPlayer>,
     game: GameManager = new GameManager()
   ) {
+    super(id);
     this.id = id;
     this.users = users;
     this.status = status;

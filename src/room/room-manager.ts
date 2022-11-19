@@ -1,18 +1,39 @@
 import { Socket } from "socket.io";
 import { User } from "../users/user";
-import { PlayerSymbol, Room } from "./room";
-import { RoomService } from "./room-service";
+import { PlayerSymbol } from "./room";
+import roomService, { RoomService } from "./room-service";
+import roomStore, { RoomStore } from "./room-store";
 
 export class RoomManager {
-  room: Room;
-  roomService: RoomService;
-  constructor(room: Room, roomService: RoomService = new RoomService()) {
-    this.room = room;
+  private roomService: RoomService;
+  private roomStore: RoomStore;
+  constructor(
+    roomService: RoomService = new RoomService(),
+    roomStore: RoomStore
+  ) {
     this.roomService = roomService;
+    this.roomStore = roomStore;
   }
 
-  private attachUserToRoom(user: User, symbol: PlayerSymbol) {
-    const room = this.room;
+  public get rooms() {
+    return this.roomStore.rooms;
+  }
+
+  public getGameStatus(roomId: string) {
+    const room = this.roomStore.getRoom(roomId);
+    if (!room) {
+      return;
+    }
+
+    return room.game.gameStatus;
+  }
+
+  public createRoom(roomId: string) {
+    return this.roomStore.createRoom(roomId);
+  }
+
+  private attachUserToRoom(roomId: string, user: User, symbol: PlayerSymbol) {
+    const room = this.roomStore.getOne(roomId);
 
     if (!room) {
       throw new Error("can not get room while attach user");
@@ -23,114 +44,143 @@ export class RoomManager {
       return;
     }
 
-    const player = { ...user, room: this.room.id, symbol };
+    const player = { ...user, room: roomId, symbol };
 
     this.roomService.addUser(room, player);
-    this.roomService.changeRoomStatus(room);
+    return this.roomService.changeRoomStatus(room);
   }
 
-  public addFirstPlayerAndEmit(socket: Socket, user: User) {
-    this.attachUserToRoom(user, PlayerSymbol.Cross);
+  public addFirstPlayerAndEmit(socket: Socket, roomId: string, user: User) {
+    const room = this.attachUserToRoom(roomId, user, PlayerSymbol.Cross);
+    this.roomStore.update(room);
 
     socket.emit("room_joined", {
-      id: this.room.id,
-      status: this.room.status,
+      id: room.id,
+      status: room.status,
       player: PlayerSymbol.Cross,
     });
   }
 
-  public addSecondPlayerAndEmit(socket: Socket, user: User) {
-    this.attachUserToRoom(user, PlayerSymbol.Circle);
+  public addSecondPlayerAndEmit(socket: Socket, roomId: string, user: User) {
+    const room = this.attachUserToRoom(roomId, user, PlayerSymbol.Circle);
+    this.roomStore.update(room);
 
     socket.emit("room_joined", {
-      id: this.room.id,
-      status: this.room.status,
+      id: room.id,
+      status: room.status,
       player: PlayerSymbol.Circle,
     });
-    socket.broadcast.to(this.room.id).emit("room_joined", {
-      id: this.room.id,
-      status: this.room.status,
+    socket.broadcast.to(roomId).emit("room_joined", {
+      id: room.id,
+      status: room.status,
       player: PlayerSymbol.Cross,
     });
   }
 
-  public startGameAndEmit(socket: Socket) {
-    this.room.game.restartGame();
-    const clearBoard = this.room.game.gameBoard;
+  public startGameAndEmit(socket: Socket, roomId: string) {
+    const room = this.roomStore.getOne(roomId);
+
+    room.game.restartGame();
+    const clearBoard = room.game.gameBoard;
+
+    roomStore.update(room);
 
     socket.emit("start_game", {
-      status: this.room.game.gameStatus,
+      status: room.game.gameStatus,
       player: PlayerSymbol.Circle,
       board: clearBoard,
     });
-    socket.to(this.room.id).emit("start_game", {
-      status: this.room.game.gameStatus,
+    socket.to(room.id).emit("start_game", {
+      status: room.game.gameStatus,
       player: PlayerSymbol.Cross,
       board: clearBoard,
     });
   }
 
-  public restartGameAndEmit(socket: Socket) {
-    const clearBoard = this.room.game.restartGame();
+  public restartGameAndEmit(socket: Socket, roomId: string) {
+    const room = this.roomStore.getOne(roomId);
+
+    const clearBoard = room.game.restartGame();
 
     socket.emit("restarted_game", {
-      status: this.room.game.gameStatus,
+      status: room.game.gameStatus,
       player: PlayerSymbol.Circle,
       board: clearBoard,
     });
-    socket.to(this.room.id).emit("restarted_game", {
-      status: this.room.game.gameStatus,
+    socket.to(room.id).emit("restarted_game", {
+      status: room.game.gameStatus,
       player: PlayerSymbol.Cross,
       board: clearBoard,
     });
   }
 
-  public makeMoveAndEmit(socket: Socket, coordinate: number) {
-    const roomCurrentPlayer = this.room.users.get(socket.id);
-    this.room.game.makeMove(coordinate, roomCurrentPlayer.symbol);
+  public makeMoveAndEmit(socket: Socket, roomId: string, coordinate: number) {
+    const room = this.roomStore.getOne(roomId);
 
-    const data = this.room.game.gameBoard;
+    const roomCurrentPlayer = room.users.get(socket.id);
+    room.game.makeMove(coordinate, roomCurrentPlayer.symbol);
+
+    const data = room.game.gameBoard;
+
+    roomStore.update(room);
 
     socket.emit("move_made", {
       board: data,
       move: [coordinate, roomCurrentPlayer.symbol],
     });
-    socket.to(this.room.id).emit("move_made", {
+    socket.to(room.id).emit("move_made", {
       board: data,
       move: [coordinate, roomCurrentPlayer.symbol],
     });
   }
 
-  public emitWinner(socket: Socket) {
-    const combination = this.room.game.gameWinCombination;
-    const roomCurrentPlayer = this.room.users.get(socket.id);
+  public emitWinner(socket: Socket, roomId: string) {
+    const room = this.roomStore.getOne(roomId);
+
+    const combination = room.game.gameWinCombination;
+    const roomCurrentPlayer = room.users.get(socket.id);
     socket.emit("winner", { user: roomCurrentPlayer.symbol, combination });
     socket
-      .to(this.room.id)
+      .to(room.id)
       .emit("winner", { user: roomCurrentPlayer.symbol, combination });
   }
 
-  public emitDraw(socket: Socket) {
+  public emitDraw(socket: Socket, roomId: string) {
     socket.emit("draw");
-    socket.to(this.room.id).emit("draw");
+    socket.to(roomId).emit("draw");
   }
 
-  public unatachUserFromRoom(userId: string) {
-    const userForRemove = this.room.users.get(userId);
+  public unatachUserFromRoom(userId: string, roomId: string) {
+    const room = this.roomStore.getOne(roomId);
+
+    const userForRemove = room.users.get(userId);
     if (!userForRemove) {
       return;
     }
 
-    this.roomService.removeUser(this.room, userForRemove.id);
-    this.roomService.changeRoomStatus(this.room);
+    this.roomService.removeUser(room, userForRemove.id);
+    return this.roomService.changeRoomStatus(room);
   }
 
-  public removeUserFromRoomAndEmit(socket: Socket, user: User) {
-    this.unatachUserFromRoom(user.id);
+  public removeUserFromRoomAndEmit(socket: Socket, user: User, roomId: string) {
+    const room = this.unatachUserFromRoom(user.id, roomId);
+    this.roomStore.update(room);
 
-    socket.to(user.room).emit("room_left", {
+    socket.to(room.id).emit("room_left", {
       status: "pending",
-      id: user.room,
+      id: room.id,
     });
   }
+
+  public removeRoomIfEmpty(roomId: string) {
+    const room = this.roomStore.getOne(roomId);
+
+    if (room.users.size === 0) {
+      this.roomStore.delete(roomId);
+    }
+  }
 }
+
+const roomManager = new RoomManager(roomService, roomStore);
+
+export default roomManager;

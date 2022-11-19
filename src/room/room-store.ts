@@ -1,32 +1,32 @@
+import { EntityStore } from "../domain/entity-store";
 import { PlayerSymbol, Room, RoomPlayer, RoomStatus } from "./room";
 
-export class RoomStore {
-  rooms: Map<string, Room>;
+export class RoomStore extends EntityStore<Room> {
   constructor() {
-    this.rooms = new Map();
+    super();
+  }
+
+  public get rooms() {
+    return this.collection;
   }
 
   public getRoom(roomId: string) {
-    return this.rooms.get(roomId);
-  }
-
-  public updateRooms(rooms: Map<string, Room>) {
-    this.rooms = rooms;
+    return this.collection.get(roomId);
   }
 
   public createRoom(id: string): void {
-    if (this.rooms.has(id)) {
+    if (this.collection.has(id)) {
       return;
     }
 
     const usersMap = new Map<PlayerSymbol, RoomPlayer>();
     const room = new Room(id, RoomStatus.Pending, usersMap);
 
-    this.rooms.set(room.id, room);
+    super.add(room);
   }
 
   public removeRoomIfEmpty(id: string): void {
-    const room = this.rooms.get(id);
+    const room = this.collection.get(id);
     if (!room) {
       return;
     }
@@ -35,7 +35,7 @@ export class RoomStore {
       return;
     }
 
-    this.rooms.delete(id);
+    super.delete(id);
   }
 }
 

@@ -4,9 +4,8 @@ import http from "http";
 import { Server, Socket } from "socket.io";
 import { User } from "./users/user";
 import { GameStatus } from "./game/game-enums";
-import usersManager from "./users/users-manager";
-import roomStore from "./room/room-store";
-import { RoomManager } from "./room/room-manager";
+import roomManager from "./room/room-manager";
+import userManager from "./users/user-manager";
 
 const app = express();
 const port = process.env.PORT || 3535;
@@ -24,12 +23,10 @@ app.get("/", (req, res) => {
 
 io.on("connection", (socket: Socket) => {
   const user = new User(socket.id, "main");
-  usersManager.addUser(user);
+  userManager.connectUser(user);
 
   socket.on("join_room", (roomId: string) => {
-    roomStore.createRoom(roomId);
-    const room = roomStore.getRoom(roomId);
-    const roomManager = new RoomManager(room);
+    roomManager.createRoom(roomId);
 
     const connected = io.sockets.adapter.rooms.get(roomId);
     const socketRooms = Array.from(socket.rooms.values()).filter(
@@ -43,12 +40,12 @@ io.on("connection", (socket: Socket) => {
     socket.join(roomId);
 
     if (io.sockets.adapter.rooms.get(roomId)?.size === 2) {
-      usersManager.updateUserRoom(user.id, roomId);
-      roomManager.addSecondPlayerAndEmit(socket, user);
-      roomManager.startGameAndEmit(socket);
+      userManager.updateUserRoom(user.id, roomId);
+      roomManager.addSecondPlayerAndEmit(socket, roomId, user);
+      roomManager.startGameAndEmit(socket, roomId);
     } else {
-      usersManager.updateUserRoom(user.id, roomId);
-      roomManager.addFirstPlayerAndEmit(socket, user);
+      userManager.updateUserRoom(user.id, roomId);
+      roomManager.addFirstPlayerAndEmit(socket, roomId, user);
     }
   });
 
@@ -58,9 +55,8 @@ io.on("connection", (socket: Socket) => {
     );
 
     const gameRoom = socketRooms && socketRooms[0];
-    const room = roomStore.getRoom(gameRoom);
-    const roomManager = new RoomManager(room);
-    roomManager.restartGameAndEmit(socket);
+
+    roomManager.restartGameAndEmit(socket, gameRoom);
   });
 
   socket.on("make_move", (message: { coordinate: number }) => {
@@ -69,33 +65,31 @@ io.on("connection", (socket: Socket) => {
     );
 
     const gameRoom = socketRooms && socketRooms[0];
-    const room = roomStore.getRoom(gameRoom);
 
-    const roomManager = new RoomManager(room);
-    roomManager.makeMoveAndEmit(socket, message.coordinate);
+    roomManager.makeMoveAndEmit(socket, gameRoom, message.coordinate);
 
-    if (room.game.gameStatus === GameStatus.Win) {
-      roomManager.emitWinner(socket);
+    const gameStatus = roomManager.getGameStatus(gameRoom);
+
+    if (gameStatus === GameStatus.Win) {
+      roomManager.emitWinner(socket, gameRoom);
     }
 
-    if (room.game.gameStatus === GameStatus.Draw) {
-      roomManager.emitDraw(socket);
+    if (gameStatus === GameStatus.Draw) {
+      roomManager.emitDraw(socket, gameRoom);
     }
   });
 
   socket.on("disconnect", () => {
-    const user = usersManager.getUser(socket.id);
+    const user = userManager.getUser(socket.id);
     if (user.room === "main") {
       return;
     }
-    roomStore.removeRoomIfEmpty(user.room);
-    const room = roomStore.getRoom(user.room);
-    const roomManager = new RoomManager(room);
+    roomManager.removeRoomIfEmpty(user.room);
 
     if (user && user.room) {
-      roomManager.removeUserFromRoomAndEmit(socket, user);
+      roomManager.removeUserFromRoomAndEmit(socket, user, user.room);
     }
-    usersManager.removeUser(socket.id);
+    userManager.removeUser(socket.id);
   });
 });
 
