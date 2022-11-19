@@ -1,25 +1,11 @@
 import express from "express";
 import http from "http";
+
 import { Server, Socket } from "socket.io";
-
-type User = {
-  id: string;
-  room: string;
-};
-
-export const userList = new Map<string, User>();
-
-export function getUser(id: string) {
-  return userList.get(id);
-}
-
-export function addUser(id: string, user: User) {
-  userList.set(id, user);
-}
-
-export function removeUser(id: string) {
-  userList.delete(id);
-}
+import { User } from "./users/user";
+import { GameStatus } from "./game/game-enums";
+import roomManager from "./room/room-manager";
+import userManager from "./users/user-manager";
 
 const app = express();
 const port = process.env.PORT || 3535;
@@ -36,40 +22,30 @@ app.get("/", (req, res) => {
 });
 
 io.on("connection", (socket: Socket) => {
+  const user = new User(socket.id, "main");
+  userManager.connectUser(user);
+
   socket.on("join_room", (roomId: string) => {
-    addUser(socket.id, { id: socket.id, room: roomId });
+    roomManager.createRoom(roomId);
+
     const connected = io.sockets.adapter.rooms.get(roomId);
     const socketRooms = Array.from(socket.rooms.values()).filter(
       (r) => r !== socket.id
     );
-
     if (socketRooms.length > 0 || (connected && connected.size === 2)) {
       socket.emit("join_error", "room is full");
-    } else {
-      socket.join(roomId);
+      return;
+    }
 
-      if (io.sockets.adapter.rooms.get(roomId).size === 2) {
-        socket.emit("room_joined", {
-          id: roomId,
-          status: "full",
-          player: "o",
-        });
-        socket.broadcast.to(roomId).emit("room_joined", {
-          id: roomId,
-          status: "full",
-          player: "x",
-        });
-        socket.emit("start_game", { status: "running", player: "o" });
-        socket
-          .to(roomId)
-          .emit("start_game", { status: "running", player: "x" });
-      } else {
-        socket.emit("room_joined", {
-          id: roomId,
-          status: "pending",
-          player: "x",
-        });
-      }
+    socket.join(roomId);
+
+    if (io.sockets.adapter.rooms.get(roomId)?.size === 2) {
+      userManager.updateUserRoom(user.id, roomId);
+      roomManager.addSecondPlayerAndEmit(socket, roomId, user);
+      roomManager.startGameAndEmit(socket, roomId);
+    } else {
+      userManager.updateUserRoom(user.id, roomId);
+      roomManager.addFirstPlayerAndEmit(socket, roomId, user);
     }
   });
 
@@ -77,30 +53,43 @@ io.on("connection", (socket: Socket) => {
     const socketRooms = Array.from(socket.rooms.values()).filter(
       (r) => r !== socket.id
     );
+
     const gameRoom = socketRooms && socketRooms[0];
-    socket.emit("restarted_game", { status: "running", player: "o" });
-    socket
-      .to(gameRoom)
-      .emit("restarted_game", { status: "running", player: "x" });
+
+    roomManager.restartGameAndEmit(socket, gameRoom);
   });
 
-  socket.on("make_move", (message) => {
+  socket.on("make_move", (message: { coordinate: number }) => {
     const socketRooms = Array.from(socket.rooms.values()).filter(
       (r) => r !== socket.id
     );
+
     const gameRoom = socketRooms && socketRooms[0];
 
-    socket.to(gameRoom).emit("move_made", message);
+    roomManager.makeMoveAndEmit(socket, gameRoom, message.coordinate);
+
+    const gameStatus = roomManager.getGameStatus(gameRoom);
+
+    if (gameStatus === GameStatus.Win) {
+      roomManager.emitWinner(socket, gameRoom);
+    }
+
+    if (gameStatus === GameStatus.Draw) {
+      roomManager.emitDraw(socket, gameRoom);
+    }
   });
 
   socket.on("disconnect", () => {
-    const user = getUser(socket.id);
-    if (user && user.room) {
-      socket
-        .to(user.room)
-        .emit("room_left", { status: "pending", id: user.room });
-      removeUser(socket.id);
+    const user = userManager.getUser(socket.id);
+    if (user.room === "main") {
+      return;
     }
+    roomManager.removeRoomIfEmpty(user.room);
+
+    if (user && user.room) {
+      roomManager.removeUserFromRoomAndEmit(socket, user, user.room);
+    }
+    userManager.removeUser(socket.id);
   });
 });
 
